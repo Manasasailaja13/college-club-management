@@ -1,0 +1,53 @@
+const path = require('path');
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const dotenv = require('dotenv');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
+
+dotenv.config();
+const app = express();
+const port = Number(process.env.PORT || 3000);
+const useDatabase = process.env.USE_DATABASE === 'true' && Boolean(process.env.DATABASE_URL);
+const pool = useDatabase ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }) : null;
+
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(__dirname));
+
+const clubs = [
+  { id: 'coding', name: 'Coding Club', category: 'Technical', icon: 'code-2', members: 248, description: 'Build, ship, and learn with a community of curious developers.', image: 'https://images.unsplash.com/photo-1517180102446-f3ece451e9d8?auto=format&fit=crop&w=900&q=80', objectives: ['Practice by building real projects', 'Prepare for hackathons and careers', 'Pair with students across departments'], coordinator: 'Dr. Meera Iyer', studentLead: 'Aarav Sharma' },
+  { id: 'music', name: 'Music Society', category: 'Cultural', icon: 'music-2', members: 182, description: 'A welcoming stage for vocalists, instrumentalists, and listeners.', image: 'https://images.unsplash.com/photo-1524368535928-5b5e00ddc76b?auto=format&fit=crop&w=900&q=80', objectives: ['Explore music without judgment', 'Perform at campus showcases', 'Collaborate across genres'], coordinator: 'Prof. Nisha Menon', studentLead: 'Ishita Rao' },
+  { id: 'robotics', name: 'Robotics Lab', category: 'Technical', icon: 'bot', members: 124, description: 'Turn ambitious ideas into machines that move, sense, and think.', image: 'https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=900&q=80', objectives: ['Learn hardware and embedded systems', 'Compete in national challenges', 'Prototype with a generous lab team'], coordinator: 'Dr. Vikram Singh', studentLead: 'Kabir Patel' },
+  { id: 'lens', name: 'Lens Collective', category: 'Photography', icon: 'camera', members: 96, description: 'Find the extraordinary in ordinary campus life.', image: 'https://images.unsplash.com/photo-1542038784456-1ea8e935640e?auto=format&fit=crop&w=900&q=80', objectives: ['Build a visual language', 'Document campus stories', 'Exhibit work every semester'], coordinator: 'Prof. Rhea Kapoor', studentLead: 'Zoya Khan' },
+  { id: 'dance', name: 'Rhythm & Roots', category: 'Cultural', icon: 'sparkles', members: 154, description: 'Move together through contemporary, folk, and street styles.', image: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?auto=format&fit=crop&w=900&q=80', objectives: ['Train with experienced choreographers', 'Perform at inter-college fests', 'Create an inclusive dance floor'], coordinator: 'Prof. Ananya Bose', studentLead: 'Maya Thomas' },
+  { id: 'impact', name: 'Impact Initiative', category: 'Social Service', icon: 'heart-handshake', members: 207, description: 'Small acts, thoughtfully organized, with an impact beyond campus.', image: 'https://images.unsplash.com/photo-1559027615-cd4628902d4a?auto=format&fit=crop&w=900&q=80', objectives: ['Serve local communities', 'Design sustainable initiatives', 'Learn by listening first'], coordinator: 'Dr. Anil Joseph', studentLead: 'Neel Gupta' }
+];
+const events = [
+  { id: 'hacknight', name: 'Midnight Build Night', club: 'Coding Club', category: 'Technical', date: '28 Sep 2026', time: '7:00 PM - 11:30 PM', venue: 'Innovation Studio', image: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=900&q=80', description: 'A low-pressure evening to turn a small idea into a working prototype with peers.' },
+  { id: 'openmic', name: 'Open Mic: Unplugged', club: 'Music Society', category: 'Cultural', date: '03 Oct 2026', time: '6:30 PM - 9:00 PM', venue: 'Amphitheatre', image: 'https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=900&q=80', description: 'An intimate evening of original songs, covers, poetry, and new voices.' },
+  { id: 'robo', name: 'RoboRush 2026', club: 'Robotics Lab', category: 'Technical', date: '10 Oct 2026', time: '9:00 AM - 4:00 PM', venue: 'Tech Block Atrium', image: 'https://images.unsplash.com/photo-1563207153-f403bf289096?auto=format&fit=crop&w=900&q=80', description: 'Build, race, and rethink what an autonomous bot can do in one electric day.' },
+  { id: 'frames', name: 'Frames of Campus', club: 'Lens Collective', category: 'Cultural', date: '15 Aug 2026', time: '4:00 PM - 7:00 PM', venue: 'Gallery Hall', image: 'https://images.unsplash.com/photo-1452780212940-6f5c0d14d848?auto=format&fit=crop&w=900&q=80', description: 'A student photography exhibition capturing the quiet energy of campus.' }
+];
+const memory = { users: [], memberships: [], registrations: [], messages: [] };
+const publicUser = user => ({ id: user.id, name: user.name, email: user.email, roll: user.roll, department: user.department, year: user.year });
+const tokenFor = user => jwt.sign(publicUser(user), process.env.JWT_SECRET || 'development-secret', { expiresIn: '7d' });
+function auth(req, res, next) { const value = req.headers.authorization || ''; try { req.user = jwt.verify(value.replace('Bearer ', ''), process.env.JWT_SECRET || 'development-secret'); next(); } catch { res.status(401).json({ error: 'Authentication required.' }); } }
+function asyncRoute(handler) { return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next); }
+
+app.get('/api/health', (req, res) => res.json({ ok: true, database: useDatabase ? 'supabase-postgresql' : 'mock-memory' }));
+app.get('/api/clubs', asyncRoute(async (req, res) => res.json(useDatabase ? (await pool.query('select id,name,category,icon,members,description,image,objectives,coordinator,student_lead as "studentLead" from public.clubs order by name')).rows : clubs)));
+app.get('/api/clubs/:id', asyncRoute(async (req, res) => { const club = useDatabase ? (await pool.query('select id,name,category,icon,members,description,image,objectives,coordinator,student_lead as "studentLead" from public.clubs where id = $1', [req.params.id])).rows[0] : clubs.find(item => item.id === req.params.id); return club ? res.json(club) : res.status(404).json({ error: 'Club not found.' }); }));
+app.get('/api/events', asyncRoute(async (req, res) => res.json(useDatabase ? (await pool.query('select id,name,club,category,event_date as date,event_time as time,venue,image,description from public.events order by event_date')).rows : events)));
+app.post('/api/auth/register', asyncRoute(async (req, res) => { const { name, roll, email, department, year, phone, password } = req.body; if (!name || !roll || !email || !department || !year || !password) return res.status(400).json({ error: 'Name, roll number, email, department, year, and password are required.' }); const existing = useDatabase ? (await pool.query('select id from public.students where email = $1 or roll_number = $2', [email, roll])).rows[0] : memory.users.find(user => user.email === email || user.roll === roll); if (existing) return res.status(409).json({ error: 'An account with that email or roll number already exists.' }); const passwordHash = await bcrypt.hash(password, 12); const user = useDatabase ? (await pool.query('insert into public.students (name, roll_number, email, department, year, phone, password_hash) values ($1,$2,$3,$4,$5,$6,$7) returning id,name,email,roll_number as roll,department,year', [name, roll, email, department, year, phone || null, passwordHash])).rows[0] : { id: `student-${Date.now()}`, name, email, roll, department, year, passwordHash }; if (!useDatabase) memory.users.push(user); res.status(201).json({ user: publicUser(user), token: tokenFor(user) }); }));
+app.post('/api/auth/login', asyncRoute(async (req, res) => { const { identity, password } = req.body; const user = useDatabase ? (await pool.query('select id,name,email,roll_number as roll,department,year,password_hash from public.students where email = $1 or roll_number = $1', [identity])).rows[0] : memory.users.find(item => item.email === identity || item.roll === identity); if (!user || !(await bcrypt.compare(password || '', user.password_hash || user.passwordHash))) return res.status(401).json({ error: 'Invalid email, roll number, or password.' }); res.json({ user: publicUser(user), token: tokenFor(user) }); }));
+app.post('/api/memberships', auth, asyncRoute(async (req, res) => { const { clubId, department, year, phone, reason, skills } = req.body; if (!clubId) return res.status(400).json({ error: 'Club is required.' }); if (useDatabase) await pool.query('insert into public.memberships (student_id, club_id, department, year, phone, reason, skills) values ($1,$2,$3,$4,$5,$6,$7)', [req.user.id, clubId, department, year, phone, reason, skills]); else memory.memberships.push({ id: `membership-${Date.now()}`, studentId: req.user.id, clubId, status: 'pending', department, year, phone, reason, skills }); res.status(201).json({ message: 'Your club registration request has been submitted successfully.' }); }));
+app.post('/api/event-registrations', auth, asyncRoute(async (req, res) => { const { eventId } = req.body; if (useDatabase) await pool.query('insert into public.event_registrations (student_id, event_id) values ($1,$2) on conflict do nothing', [req.user.id, eventId]); else memory.registrations.push({ studentId: req.user.id, eventId }); res.status(201).json({ message: 'You are registered. See you there!' }); }));
+app.post('/api/contact', asyncRoute(async (req, res) => { const { name, email, subject, message } = req.body; if (!name || !email || !subject || !message) return res.status(400).json({ error: 'All contact fields are required.' }); if (useDatabase) await pool.query('insert into public.contact_messages (name,email,subject,message) values ($1,$2,$3,$4)', [name, email, subject, message]); else memory.messages.push({ name, email, subject, message, createdAt: new Date().toISOString() }); res.status(201).json({ message: 'Message sent. We will get back to you soon.' }); }));
+
+app.use((error, req, res, next) => { console.error(error); res.status(500).json({ error: 'Something went wrong on the server.' }); });
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.listen(port, () => console.log(`CampusCircle API running at http://localhost:${port} (${useDatabase ? 'Supabase PostgreSQL' : 'mock memory'} mode)`));
